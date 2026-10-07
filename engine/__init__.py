@@ -28,6 +28,12 @@ from .report import ReportGenerator
 from .defects import DefectManager
 from .notify import NotificationManager
 from .scheduler import Scheduler
+from .weekly import (
+    WeeklyReportManager,
+    SECTIONS as WEEKLY_SECTIONS,
+    SECTION_LABELS as WEEKLY_SECTION_LABELS,
+    FREQUENCY_PRESETS as WEEKLY_FREQUENCY_PRESETS,
+)
 
 __all__ = [
     "PRIORITIES",
@@ -46,4 +52,8 @@ __all__ = [
     "DefectManager",
     "NotificationManager",
     "Scheduler",
+    "WeeklyReportManager",
+    "WEEKLY_SECTIONS",
+    "WEEKLY_SECTION_LABELS",
+    "WEEKLY_FREQUENCY_PRESETS",
 ]

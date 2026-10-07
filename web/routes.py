@@ -57,6 +57,10 @@ def _notify():
     return current_app.config["NOTIFY"]
 
 
+def _weekly():
+    return current_app.config["WEEKLY"]
+
+
 def _payload() -> dict:
     return request.get_json(silent=True) or {}
 
@@ -686,6 +690,140 @@ def test_integration(integration_id: str):
 @api.get("/projects/<project_id>/events")
 def list_events(project_id: str):
     return jsonify({"events": _notify().events(project_id)})
+
+
+# ---------------------------------------------------------------------------
+# 质量周报订阅
+# ---------------------------------------------------------------------------
+
+def _weekly_meta():
+    """返回周报模块与频率预设，供前端渲染勾选项。"""
+    from engine.weekly import (SECTIONS, SECTION_LABELS, FREQUENCY_PRESETS,
+                               WINDOW_DAYS)
+    return {
+        "sections": SECTIONS,
+        "section_labels": SECTION_LABELS,
+        "frequencies": [{"key": k, "cron": v[0], "label": v[1],
+                         "window_days": WINDOW_DAYS.get(k, 7)}
+                        for k, v in FREQUENCY_PRESETS.items()],
+    }
+
+
+@api.get("/weekly/meta")
+def weekly_meta():
+    return jsonify(_weekly_meta())
+
+
+@api.get("/weekly/recipients")
+def weekly_recipients():
+    """可选接收人 = 全部项目下的通知集成（周报订阅可跨项目）。"""
+    out = []
+    for integration in _store("integrations").query(order_by="created_at"):
+        pid = integration.get("project_id")
+        project = _store("projects").get(pid) if pid else None
+        out.append({
+            "id": integration["id"],
+            "name": integration.get("name"),
+            "type": integration.get("type"),
+            "enabled": integration.get("enabled", True),
+            "target": (integration.get("config") or {}).get("url")
+                      or (integration.get("config") or {}).get("address")
+                      or (integration.get("config") or {}).get("channel") or "",
+            "project_id": pid,
+            "project_name": project.get("name") if project else "—",
+        })
+    return jsonify({"recipients": out})
+
+
+@api.get("/weekly/subscriptions")
+def list_weekly_subscriptions():
+    return jsonify({"subscriptions": _weekly().list_subscriptions()})
+
+
+@api.post("/weekly/subscriptions")
+def create_weekly_subscription():
+    try:
+        sub = _weekly().create_subscription(_payload())
+    except ValueError as exc:
+        return _err(str(exc))
+    return jsonify(sub)
+
+
+@api.get("/weekly/subscriptions/<sub_id>")
+def get_weekly_subscription(sub_id: str):
+    sub = _weekly().get_subscription(sub_id)
+    if sub is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(sub)
+
+
+@api.put("/weekly/subscriptions/<sub_id>")
+def update_weekly_subscription(sub_id: str):
+    try:
+        sub = _weekly().update_subscription(sub_id, _payload())
+    except ValueError as exc:
+        return _err(str(exc))
+    if sub is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(_weekly().get_subscription(sub_id))
+
+
+@api.delete("/weekly/subscriptions/<sub_id>")
+def delete_weekly_subscription(sub_id: str):
+    if not _weekly().delete_subscription(sub_id):
+        return _err("周报订阅不存在", 404)
+    return jsonify({"ok": True})
+
+
+@api.post("/weekly/subscriptions/<sub_id>/pause")
+def pause_weekly_subscription(sub_id: str):
+    sub = _weekly().set_paused(sub_id, True)
+    if sub is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(_weekly().get_subscription(sub_id))
+
+
+@api.post("/weekly/subscriptions/<sub_id>/resume")
+def resume_weekly_subscription(sub_id: str):
+    sub = _weekly().set_paused(sub_id, False)
+    if sub is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(_weekly().get_subscription(sub_id))
+
+
+@api.post("/weekly/subscriptions/<sub_id>/preview")
+def preview_weekly_report(sub_id: str):
+    """预览：按当前订阅配置截取快照并渲染，但不落库、不发送。"""
+    at = request.args.get("at", type=float)
+    report = _weekly().preview(sub_id, at=at)
+    if report is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(report)
+
+
+@api.post("/weekly/subscriptions/<sub_id>/send")
+def send_weekly_report(sub_id: str):
+    """立即发送：持久化报告、逐接收人投递并留痕。"""
+    at = request.args.get("at", type=float)
+    report = _weekly().send(sub_id, trigger="manual", at=at)
+    if report is None:
+        return _err("周报订阅不存在", 404)
+    return jsonify(report)
+
+
+@api.get("/weekly/reports")
+def list_weekly_reports():
+    sub_id = request.args.get("subscription_id")
+    limit = request.args.get("limit", 50, type=int)
+    return jsonify({"reports": _weekly().list_reports(sub_id, limit=limit)})
+
+
+@api.get("/weekly/reports/<report_id>")
+def get_weekly_report(report_id: str):
+    report = _weekly().get_report(report_id)
+    if report is None:
+        return _err("周报不存在", 404)
+    return jsonify(report)
 
 
 # ---------------------------------------------------------------------------

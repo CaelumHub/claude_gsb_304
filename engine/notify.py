@@ -129,6 +129,51 @@ class NotificationManager:
         record["integration"] = integration
         return record
 
+    def deliver_report(self, integration: dict, payload: dict,
+                       project_id: Optional[str] = None,
+                       trigger: str = "manual") -> dict:
+        """投递一份（周）报告内容到指定集成，并写一条事件留痕。
+
+        与构建事件的 :meth:`fire` 不同：报告是**指定接收人**的直接投递，
+        不经过 ``events`` 订阅过滤（接收人由周报订阅的 ``recipient_ids``
+        决定）。事件类型统一记为 ``weekly.report``，方便在通知历史页筛选。
+        无论集成是否启用都允许投递（发送动作本身就是显式选择该接收人）。
+        """
+        event = "weekly.report"
+        outcome = self._deliver_report_payload(integration, payload)
+        record = {
+            "id": new_id("evt"),
+            "project_id": project_id if project_id is not None else integration.get("project_id"),
+            "integration_id": integration["id"],
+            "integration_name": integration.get("name"),
+            "type": integration.get("type"),
+            "event": event,
+            "status": outcome["status"],
+            "recipient": outcome["recipient"],
+            "latency_ms": outcome["latency_ms"],
+            "payload": payload,
+            "trigger": trigger,
+            "created_at": time.time(),
+        }
+        self._events.insert(record)
+        return record
+
+    def _deliver_report_payload(self, integration: dict, payload: dict) -> dict:
+        """报告投递（模拟）：复用集成的目标配置，结果对内容确定。"""
+        target = (integration.get("config") or {}).get("url") or \
+            (integration.get("config") or {}).get("address") or \
+            (integration.get("config") or {}).get("channel") or "未配置目标"
+        latency = 8 + _seeded_int(integration["id"], "weekly.report",
+                                  payload.get("report_id"),
+                                  payload.get("project_scope")) % 120
+        failed = not target or target == "未配置目标" or \
+            (integration.get("config") or {}).get("fail", False)
+        return {
+            "status": "failed" if failed else "delivered",
+            "recipient": target,
+            "latency_ms": latency,
+        }
+
     def events(self, project_id: str, limit: int = 100) -> list[dict]:
         return self._events.query(where=[("project_id", "eq", project_id)],
                                   order_by="created_at", order="desc",

@@ -127,17 +127,36 @@ def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
         "created_at": time.time(),
     })
 
-    notify_mgr.create(pid, {
+    int_webhook = notify_mgr.create(pid, {
         "type": "webhook",
         "name": "CI Webhook",
         "config": {"url": "https://example.com/hooks/ci"},
         "events": ["build.finished", "build.failed"],
     })
-    notify_mgr.create(pid, {
+    int_email = notify_mgr.create(pid, {
         "type": "email",
         "name": "团队邮件",
         "config": {"address": "qa@example.com"},
         "events": ["build.failed"],
+    })
+
+    # 默认周报订阅：每周一 9 点，四个模块全含，合并成一份发给两个接收人
+    registry.store("weekly_subscriptions").insert({
+        "id": new_id("wsub"),
+        "name": "每周质量周报",
+        "frequency": "weekly_mon",
+        "cron": "0 9 * * 1",
+        "project_ids": [pid],
+        "recipient_ids": [int_webhook["id"], int_email["id"]],
+        "sections": ["pass_trend", "top_failures", "open_defects", "coverage_delta"],
+        "delivery": "merged",
+        "top_n": 10,
+        "trend_points": 10,
+        "window_days": 7,
+        "enabled": True,
+        "last_fired_minute": None,
+        "last_report_id": None,
+        "created_at": time.time(),
     })
 
     return {"project": proj, "env_id": env["id"], "suite_id": suite["id"]}

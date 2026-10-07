@@ -34,7 +34,7 @@ class Scheduler:
     def __init__(self, registry, build_registry, executor, env_manager,
                  report_gen, coverage_analyzer, defect_manager, notify_manager,
                  max_build_workers: int = 4, max_case_workers: int = 8,
-                 tick_seconds: float = 20.0):
+                 tick_seconds: float = 20.0, weekly_manager=None):
         self.registry = registry
         self.builds = build_registry
         self.executor = executor
@@ -43,6 +43,7 @@ class Scheduler:
         self.coverage = coverage_analyzer
         self.defects = defect_manager
         self.notify = notify_manager
+        self.weekly = weekly_manager
 
         self.max_build_workers = max_build_workers
         self.max_case_workers = max_case_workers
@@ -310,6 +311,13 @@ class Scheduler:
                     )
             except ValueError:
                 continue
+
+        # 周报订阅：到点截取快照并推送（内部自带分钟级去重）
+        if self.weekly is not None:
+            try:
+                self.weekly.scan_and_send(now)
+            except Exception:  # noqa: BLE001
+                pass
 
     def _record_schedule_run(self, schedule_id: str, project_id: str,
                              build_id: str) -> None:
