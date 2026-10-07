@@ -13,7 +13,7 @@ import time
 from engine import new_id
 
 
-def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
+def seed_demo_data(registry, env_mgr, notify_mgr, weekly_mgr=None) -> dict:
     """生成演示项目，返回 ``{"project": ..., "env_id": ..., "suite_id": ...}``。"""
     proj = {
         "id": new_id("proj"),
@@ -139,5 +139,35 @@ def seed_demo_data(registry, env_mgr, notify_mgr) -> dict:
         "config": {"address": "qa@example.com"},
         "events": ["build.failed"],
     })
+
+    # -- 质量周报订阅（演示两种典型形态：单人 / 合并多接收人） -------------
+    if weekly_mgr is not None:
+        weekly_mgr.create_subscription({
+            "name": "测试负责人 · 每周质量周报",
+            "project_ids": [pid],
+            "cron": "0 9 * * 1",           # 每周一 09:00
+            "window_days": 7,
+            "mode": "auto",
+            "modules": ["pass_rate_trend", "top_failures",
+                        "open_defects", "coverage_change"],
+            "recipients": [
+                {"type": "email", "name": "测试负责人",
+                 "target": "qa-lead@example.com"},
+                {"type": "webhook", "name": "质量群机器人",
+                 "target": "https://example.com/hooks/quality"},
+            ],
+        })
+        weekly_mgr.create_subscription({
+            "name": "研发负责人 · 先预览再发送",
+            "project_ids": [pid],
+            "cron": "0 10 * * 1",          # 每周一 10:00，只生成草稿
+            "window_days": 7,
+            "mode": "manual",
+            "modules": ["pass_rate_trend", "open_defects"],
+            "recipients": [
+                {"type": "email", "name": "研发负责人",
+                 "target": "dev-lead@example.com"},
+            ],
+        })
 
     return {"project": proj, "env_id": env["id"], "suite_id": suite["id"]}

@@ -12,6 +12,7 @@ const PAGES = [
   { file: "defects.html",     name: "缺陷跟踪",     desc: "缺陷闭环" },
   { file: "environments.html",name: "环境管理",     desc: "配置与依赖" },
   { file: "schedules.html",   name: "定时任务",     desc: "计划与触发" },
+  { file: "weekly.html",      name: "质量周报",     desc: "订阅与推送" },
   { file: "notifications.html", name: "通知与集成", desc: "Webhook 等" },
 ];
 
@@ -19,6 +20,7 @@ const PAGE_NAMES = {
   projects: "项目管理", cases: "测试用例", suites: "测试套件与分组",
   monitor: "执行监控", reports: "测试报告", coverage: "代码覆盖率",
   defects: "缺陷跟踪", environments: "环境管理", schedules: "定时任务与触发",
+  weekly: "质量周报订阅", "weekly-report": "周报预览",
   notifications: "通知与集成",
 };
 

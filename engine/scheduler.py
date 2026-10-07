@@ -48,6 +48,9 @@ class Scheduler:
         self.max_case_workers = max_case_workers
         self.tick_seconds = tick_seconds
 
+        # 质量周报管理器（由 app 装配后注入；缺省时 tick 不扫描周报订阅）
+        self.weekly = None
+
         self._build_pool = ThreadPoolExecutor(
             max_workers=max_build_workers, thread_name_prefix="build")
         self._running: dict[str, dict] = {}
@@ -278,6 +281,11 @@ class Scheduler:
         while not self._stop_event.is_set():
             try:
                 self._scan_schedules()
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                if self.weekly is not None:
+                    self.weekly.scan_due()
             except Exception:  # noqa: BLE001
                 pass
             self._stop_event.wait(self.tick_seconds)

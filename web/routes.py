@@ -57,6 +57,10 @@ def _notify():
     return current_app.config["NOTIFY"]
 
 
+def _weekly():
+    return current_app.config["WEEKLY"]
+
+
 def _payload() -> dict:
     return request.get_json(silent=True) or {}
 
@@ -689,6 +693,146 @@ def list_events(project_id: str):
 
 
 # ---------------------------------------------------------------------------
+# 质量周报：订阅 / 快照 / 预览 / 发送 / 留痕
+# ---------------------------------------------------------------------------
+
+def _attach_subscription_extras(sub: dict) -> dict:
+    """给订阅附上项目名、频率描述与最近一次报告，供列表页直接展示。"""
+    sched = _scheduler()
+    sub["schedule_description"] = sched.describe_cron(sub.get("cron", ""))
+    projects_store = _store("projects")
+    sub["project_names"] = [
+        (projects_store.get(pid) or {}).get("name", pid)
+        for pid in sub.get("project_ids", [])
+    ]
+    reports = _store("weekly_reports").query(
+        where=[("subscription_id", "eq", sub["id"])],
+        order_by="created_at", order="desc", limit=1)
+    sub["latest_report"] = {"id": reports[0]["id"], "status": reports[0]["status"],
+                            "period_label": reports[0].get("period_label")} if reports else None
+    return sub
+
+
+@api.get("/weekly/subscriptions")
+def list_weekly_subscriptions():
+    subs = [_attach_subscription_extras(s) for s in _weekly().list_subscriptions()]
+    return jsonify({"subscriptions": subs})
+
+
+@api.post("/weekly/subscriptions")
+def create_weekly_subscription():
+    sub = _weekly().create_subscription(_payload())
+    if "error" in sub:
+        return _err(sub["error"])
+    return jsonify(_attach_subscription_extras(sub))
+
+
+@api.get("/weekly/subscriptions/<sub_id>")
+def get_weekly_subscription(sub_id: str):
+    sub = _weekly().get_subscription(sub_id)
+    if sub is None:
+        return _err("订阅不存在", 404)
+    return jsonify(sub)
+
+
+@api.put("/weekly/subscriptions/<sub_id>")
+def update_weekly_subscription(sub_id: str):
+    if _weekly().get_subscription(sub_id) is None:
+        return _err("订阅不存在", 404)
+    updated = _weekly().update_subscription(sub_id, _payload())
+    if updated is None:
+        return _err("订阅不存在", 404)
+    if "error" in updated:
+        return _err(updated["error"])
+    return jsonify(_attach_subscription_extras(updated))
+
+
+@api.delete("/weekly/subscriptions/<sub_id>")
+def delete_weekly_subscription(sub_id: str):
+    if not _weekly().delete_subscription(sub_id):
+        return _err("订阅不存在", 404)
+    return jsonify({"ok": True})
+
+
+@api.post("/weekly/subscriptions/<sub_id>/pause")
+def pause_weekly_subscription(sub_id: str):
+    enabled = bool((_payload() or {}).get("enabled", False))
+    updated = _weekly().set_enabled(sub_id, enabled)
+    if updated is None:
+        return _err("订阅不存在", 404)
+    return jsonify(updated)
+
+
+@api.post("/weekly/subscriptions/<sub_id>/preview")
+def preview_weekly_subscription(sub_id: str):
+    """按订阅当前配置生成预览草稿（不发送），同周期复用同一份草稿。"""
+    report = _weekly().preview_subscription(sub_id)
+    if "error" in report:
+        return _err(report["error"], 404)
+    return jsonify(report)
+
+
+@api.post("/weekly/subscriptions/<sub_id>/send")
+def send_weekly_subscription(sub_id: str):
+    """立即按订阅生成并发送周报（手动触发，与到点自动发送同一路径）。"""
+    report = _weekly().send_subscription(sub_id)
+    if "error" in report:
+        return _err(report["error"], 404)
+    return jsonify(report)
+
+
+@api.get("/weekly/reports")
+def list_weekly_reports():
+    sub_id = request.args.get("subscription_id")
+    return jsonify({"reports": _weekly().list_reports(sub_id)})
+
+
+@api.get("/weekly/reports/<report_id>")
+def get_weekly_report(report_id: str):
+    report = _weekly().get_report(report_id)
+    if report is None:
+        return _err("周报不存在", 404)
+    return jsonify(report)
+
+
+@api.post("/weekly/reports/<report_id>/send")
+def send_weekly_report(report_id: str):
+    """发送已生成的报告。
+
+    - 不带 body / body 为空：投递给所属订阅的接收人（预览确认后发送）；
+    - body 带 ``recipients``：临时投递给指定接收人（同一口径的数据，
+      单独发给某人或临时合并发给另一个人）。
+    """
+    data = _payload()
+    recipients = data.get("recipients") if data else None
+    report = _weekly().send_report(report_id, recipients=recipients)
+    if "error" in report:
+        return _err(report["error"], 404 if report["error"] == "报告不存在" else 400)
+    return jsonify(report)
+
+
+@api.get("/weekly/deliveries")
+def list_weekly_deliveries():
+    return jsonify({"deliveries": _weekly().list_deliveries()})
+
+
+@api.post("/weekly/preview")
+def weekly_ad_hoc_preview():
+    """临时预览：不创建订阅，按给定项目 / 模块 / 窗口直接生成一份报告。"""
+    data = _payload()
+    project_ids = data.get("project_ids") or []
+    modules = data.get("modules") or []
+    window_days = data.get("window_days", 7)
+    report = _weekly().generate_report(
+        project_ids=project_ids, modules=modules, window_days=window_days,
+        title=data.get("title", "质量周报（临时预览）"),
+        subscription_id=None)
+    if "error" in report:
+        return _err(report["error"])
+    return jsonify(report)
+
+
+# ---------------------------------------------------------------------------
 # 演示数据
 # ---------------------------------------------------------------------------
 
@@ -696,4 +840,5 @@ def list_events(project_id: str):
 def seed_demo():
     """一键生成演示项目（含用例 / 套件 / 环境 / 计划 / 集成）。"""
     from .seed import seed_demo_data
-    return jsonify(seed_demo_data(_registry(), _env_mgr(), _notify()))
+    return jsonify(seed_demo_data(_registry(), _env_mgr(), _notify(),
+                                  _weekly()))

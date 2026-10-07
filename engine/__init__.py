@@ -10,6 +10,7 @@
 - :mod:`engine.report`      测试报告生成（通过率 / 耗时 / 分组 / 趋势）
 - :mod:`engine.defects`     缺陷跟踪
 - :mod:`engine.notify`      通知与集成
+- :mod:`engine.weekly`      质量周报（订阅 / 数据快照 / 报告 / 投递留痕）
 - :mod:`engine.scheduler`   并发调度（构建池 + 用例池 + 定时触发循环）
 """
 
@@ -27,6 +28,14 @@ from .coverage import CoverageAnalyzer
 from .report import ReportGenerator
 from .defects import DefectManager
 from .notify import NotificationManager
+from .weekly import (
+    WeeklyReportManager,
+    WEEKLY_MODULES,
+    MODULE_LABELS,
+    period_for,
+    period_label,
+    render_report_text,
+)
 from .scheduler import Scheduler
 
 __all__ = [
@@ -45,5 +54,11 @@ __all__ = [
     "ReportGenerator",
     "DefectManager",
     "NotificationManager",
+    "WeeklyReportManager",
+    "WEEKLY_MODULES",
+    "MODULE_LABELS",
+    "period_for",
+    "period_label",
+    "render_report_text",
     "Scheduler",
 ]

@@ -21,7 +21,7 @@ if BASE_DIR not in sys.path:
 
 from engine import (Scheduler, TestExecutor, EnvironmentManager,          # noqa: E402
                     CoverageAnalyzer, ReportGenerator, DefectManager,
-                    NotificationManager)
+                    NotificationManager, WeeklyReportManager)
 from storage import StoreRegistry, BuildStoreRegistry                       # noqa: E402
 from web import api                                                         # noqa: E402
 from web.seed import seed_demo_data                                         # noqa: E402
@@ -45,11 +45,13 @@ def create_app(data_root: str | None = None) -> Flask:
     report_gen = ReportGenerator(build_registry)
     defects = DefectManager(registry)
     notify = NotificationManager(registry)
+    weekly = WeeklyReportManager(registry, build_registry, coverage, defects)
     scheduler = Scheduler(
         registry, build_registry, executor, env_manager,
         report_gen, coverage, defects, notify,
         max_build_workers=4, max_case_workers=8, tick_seconds=20,
     )
+    scheduler.weekly = weekly
 
     # -- 注入 Flask config -------------------------------------------------
     app.config["DATA_ROOT"] = data_root
@@ -61,6 +63,7 @@ def create_app(data_root: str | None = None) -> Flask:
     app.config["REPORT_GEN"] = report_gen
     app.config["DEFECTS"] = defects
     app.config["NOTIFY"] = notify
+    app.config["WEEKLY"] = weekly
     app.config["JSON_AS_ASCII"] = False
 
     app.register_blueprint(api)
@@ -79,12 +82,29 @@ def create_app(data_root: str | None = None) -> Flask:
     # -- 首次启动：无数据则自动生成演示数据并触发一次构建 --------------------
     # 让各页面一打开就有内容可点、可测，报告/覆盖率/缺陷/监控也有初始数据。
     if not registry.store("projects").all():
-        seeded = seed_demo_data(registry, env_manager, notify)
+        seeded = seed_demo_data(registry, env_manager, notify, weekly)
         try:
             scheduler.submit_build(
                 seeded["project"]["id"], seeded["suite_id"], trigger="auto_seed")
         except Exception:  # noqa: BLE001
             pass
+    elif not weekly.list_subscriptions():
+        # 老数据（已有项目但还没有周报订阅）：给现有项目补一个示例订阅，
+        # 让「质量周报」页一打开就有内容，用户可随时删除/修改。
+        for project in registry.store("projects").all():
+            weekly.create_subscription({
+                "name": f"{project.get('name', '项目')} · 每周质量周报",
+                "project_ids": [project["id"]],
+                "cron": "0 9 * * 1",
+                "window_days": 7,
+                "mode": "auto",
+                "modules": ["pass_rate_trend", "top_failures",
+                            "open_defects", "coverage_change"],
+                "recipients": [
+                    {"type": "email", "name": "测试负责人",
+                     "target": "qa@example.com"},
+                ],
+            })
 
     # -- 调度器生命周期 ----------------------------------------------------
     scheduler.start()

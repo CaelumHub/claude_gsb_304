@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>质量周报订阅 - 自动化测试与持续集成平台</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    .sub-item { border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; margin-bottom: 10px; }
+    .cron-box { font-family: var(--mono); font-size: 13px; background: var(--surface-2);
+      border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; }
+    .rcpt-row { display: grid; grid-template-columns: 110px 130px 1fr auto; gap: 8px; margin-bottom: 8px; align-items: center; }
+    .proj-chips { display: flex; flex-direction: column; gap: 6px; max-height: 150px; overflow: auto;
+      border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: #fff; }
+    .proj-chips label { display: inline-flex; gap: 6px; font-weight: 400; color: var(--text); align-items: center; }
+    .tab-btns { display: flex; gap: 8px; margin-bottom: 16px; }
+    table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+    table.tbl th, table.tbl td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
+    table.tbl th { color: var(--text-muted); font-weight: 600; font-size: 12px; }
+    .preview-modal { position: fixed; inset: 0; background: rgba(15,23,42,.45); display: none;
+      align-items: center; justify-content: center; z-index: 50; }
+    .preview-modal .box { background: #fff; border-radius: 12px; width: min(860px, 92vw);
+      max-height: 88vh; display: flex; flex-direction: column; overflow: hidden; }
+    .preview-modal .box header, .preview-modal .box footer { padding: 14px 18px; border-bottom: 1px solid var(--border); }
+    .preview-modal .box footer { border-bottom: none; border-top: 1px solid var(--border); }
+    .preview-modal .body { padding: 18px; overflow: auto; }
+    pre.plain { white-space: pre-wrap; font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+      background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 14px; }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar" id="site-sidebar"></aside>
+
+  <main class="main">
+    <h1 class="page-title">质量周报订阅</h1>
+    <p class="page-desc">为一个或多个项目配置周报订阅：接收人、频率与内容模块。报告在固定时间点截取
+      <strong>同一份数据快照</strong>，保证各段落与不同接收人看到的数字完全一致；支持先预览再发送、发送留痕、随时暂停。</p>
+
+    <div class="tab-btns">
+      <button class="btn" id="tab-subs">订阅管理</button>
+      <button class="btn secondary" id="tab-history">发送历史</button>
+    </div>
+
+    <div id="pane-subs">
+      <div class="grid cols-2">
+        <section class="card">
+          <div class="row spread">
+            <h2 style="margin:0">订阅列表</h2>
+            <button class="btn small" id="btn-new">新建订阅</button>
+          </div>
+          <div class="mt" id="sub-list"><div class="empty">加载中…</div></div>
+        </section>
+
+        <section class="card" id="edit-card">
+          <h2 id="edit-title">新建订阅</h2>
+
+          <div><label>订阅名称</label><input type="text" id="f-name" placeholder="测试负责人 · 每周质量周报"></div>
+
+          <div class="mt"><label>包含项目（可多选合并成一份周报）</label>
+            <div class="proj-chips" id="f-projects"><span class="muted">加载中…</span></div>
+          </div>
+
+          <div class="grid cols-2 mt">
+            <div><label>发送频率（cron：分 时 日 月 周）</label>
+              <input type="text" id="f-cron" class="mono" value="0 9 * * 1" oninput="previewCron()">
+              <div class="muted" id="cron-desc" style="font-size:12px;margin-top:4px"></div>
+            </div>
+            <div><label>统计窗口（天）</label>
+              <input type="number" id="f-window" value="7" min="1" max="90">
+              <div class="muted" style="font-size:12px;margin-top:4px">默认 7 天；周一早上收到的是上周一~周日的数据</div>
+            </div>
+          </div>
+
+          <div class="mt"><label>内容模块</label>
+            <div class="row" style="gap:14px" id="f-modules">
+              <label><input type="checkbox" value="pass_rate_trend" checked style="width:auto"> 通过率趋势</label>
+              <label><input type="checkbox" value="top_failures" checked style="width:auto"> 失败 Top 用例</label>
+              <label><input type="checkbox" value="open_defects" checked style="width:auto"> 未关闭缺陷</label>
+              <label><input type="checkbox" value="coverage_change" checked style="width:auto"> 覆盖率变化</label>
+            </div>
+          </div>
+
+          <div class="grid cols-2 mt">
+            <div><label>到点动作</label><select id="f-mode">
+              <option value="auto">自动生成并发送</option>
+              <option value="manual">只生成草稿，人工确认后发送</option>
+            </select></div>
+            <div><label style="display:inline-flex;gap:6px;font-weight:400;color:var(--text);align-items:center;margin-top:22px">
+              <input type="checkbox" id="f-enabled" checked style="width:auto"> 启用（取消勾选即暂停）</label></div>
+          </div>
+
+          <div class="mt"><label>接收人</label>
+            <div id="f-recipients"></div>
+            <button class="btn small secondary" type="button" onclick="addRecipient()">+ 添加接收人</button>
+          </div>
+
+          <div class="row mt">
+            <button class="btn" id="btn-save">保存订阅</button>
+            <button class="btn secondary" id="btn-preview">生成预览</button>
+            <button class="btn secondary" id="btn-cancel">清空</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div id="pane-history" style="display:none">
+      <div class="card">
+        <h2>发送历史</h2>
+        <div class="muted" style="font-size:13px;margin-bottom:10px">
+          每次预览生成草稿、每次投递都在此留痕；点开任意报告可查看完整内容与各接收人投递结果。</div>
+        <table class="tbl">
+          <thead><tr><th>报告</th><th>统计周期</th><th>项目数</th><th>状态</th><th>生成/发送时间</th><th>投递</th><th></th></tr></thead>
+          <tbody id="history-body"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="card mt">
+        <h2>投递明细</h2>
+        <table class="tbl">
+          <thead><tr><th>时间</th><th>接收人</th><th>类型</th><th>目标</th><th>结果</th><th>延迟</th></tr></thead>
+          <tbody id="delivery-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- 预览弹层 -->
+<div class="preview-modal" id="preview-modal">
+  <div class="box">
+    <header class="row spread">
+      <strong id="pm-title">周报预览</strong>
+      <span class="muted" id="pm-period" style="font-size:13px"></span>
+    </header>
+    <div class="body">
+      <div class="row" style="gap:10px;margin-bottom:12px">
+        <span class="badge pending" id="pm-status"></span>
+        <span class="muted" id="pm-meta" style="font-size:13px"></span>
+      </div>
+      <div id="pm-content"></div>
+      <h3 style="margin-top:18px">推送正文（纯文本 / 邮件源）</h3>
+      <pre class="plain" id="pm-text"></pre>
+    </div>
+    <footer class="row spread">
+      <div class="row">
+        <button class="btn green" id="pm-send">确认发送给订阅接收人</button>
+        <button class="btn secondary" id="pm-send-single">临时单独发给…</button>
+      </div>
+      <button class="btn secondary" id="pm-close">关闭</button>
+    </footer>
+  </div>
+</div>
+
+<script src="/static/js/common.js"></script>
+<script>
+renderNav("weekly.html");
+
+let projects = [];
+let subscriptions = [];
+let editingId = null;
+let previewReport = null;
+
+async function init() {
+  const d = await api("/api/projects");
+  projects = d.projects || [];
+  renderProjectPicker();
+  addRecipient();
+  previewCron();
+  await loadSubscriptions();
+}
+
+function renderProjectPicker() {
+  const host = $("#f-projects");
+  if (!projects.length) {
+    host.innerHTML = '<span class="muted">暂无项目，请先在「项目管理」创建。</span>';
+    return;
+  }
+  host.innerHTML = projects.map(p =>
+    `<label><input type="checkbox" class="proj-chk" value="${p.id}"> ${esc(p.name)}</label>`).join("");
+}
+
+// ---------------- 接收人编辑 ----------------
+function addRecipient(type = "email", name = "", target = "") {
+  const row = document.createElement("div");
+  row.className = "rcpt-row";
+  row.innerHTML = `
+    <select class="r-type">
+      <option value="email">Email</option><option value="webhook">Webhook</option>
+      <option value="slack">Slack</option><option value="dingtalk">钉钉</option>
+    </select>
+    <input class="r-name" placeholder="接收人名称" value="${esc(name)}">
+    <input class="r-target" placeholder="邮箱地址 / Webhook URL / 频道" value="${esc(target)}">
+    <button class="btn small danger" type="button">删除</button>`;
+  row.querySelector(".r-type").value = type;
+  row.querySelector("button").onclick = () => row.remove();
+  $("#f-recipients").appendChild(row);
+}
+
+function readRecipients() {
+  return $$("#f-recipients .rcpt-row").map(r => ({
+    type: r.querySelector(".r-type").value,
+    name: r.querySelector(".r-name").value.trim(),
+    target: r.querySelector(".r-target").value.trim(),
+  })).filter(r => r.target || r.name);
+}
+
+function fillRecipients(recipients) {
+  $("#f-recipients").innerHTML = "";
+  (recipients || []).forEach(r => addRecipient(r.type, r.name, r.target));
+  if (!recipients || !recipients.length) addRecipient();
+}
+
+function readForm() {
+  const modules = $$("#f-modules input:checked").map(c => c.value);
+  return {
+    name: $("#f-name").value.trim() || "质量周报",
+    project_ids: $$(".proj-chk:checked").map(c => c.value),
+    cron: $("#f-cron").value.trim(),
+    window_days: Number($("#f-window").value || 7),
+    modules,
+    mode: $("#f-mode").value,
+    enabled: $("#f-enabled").checked,
+    recipients: readRecipients(),
+  };
+}
+
+// ---------------- 订阅列表 ----------------
+async function loadSubscriptions() {
+  const d = await api("/api/weekly/subscriptions");
+  subscriptions = d.subscriptions || [];
+  const host = $("#sub-list");
+  if (!subscriptions.length) { host.innerHTML = '<div class="empty">还没有订阅，点击右上角「新建订阅」。</div>'; return; }
+  host.innerHTML = subscriptions.map(s => `
+    <div class="sub-item">
+      <div class="row spread">
+        <div class="row"><strong>${esc(s.name)}</strong>
+          <span class="badge ${s.enabled ? "blue" : "pending"}">${s.enabled ? "已启用" : "已暂停"}</span>
+          <span class="badge ${s.mode === "auto" ? "passed" : "violet"}">${s.mode === "auto" ? "到点自动发送" : "先预览再发送"}</span>
+        </div>
+        <div class="row">
+          <button class="btn small secondary" onclick="toggleSub('${s.id}', ${!s.enabled})">${s.enabled ? "暂停" : "恢复"}</button>
+          <button class="btn small secondary" onclick="previewSub('${s.id}')">预览</button>
+          <button class="btn small green" onclick="sendNow('${s.id}')">立即发送</button>
+          <button class="btn small secondary" onclick="editSub('${s.id}')">编辑</button>
+          <button class="btn small danger" onclick="delSub('${s.id}')">删除</button>
+        </div>
+      </div>
+      <div class="cron-box mt">${esc(s.cron)}</div>
+      <div class="mt muted" style="font-size:13px">${esc(s.schedule_description || "")} · 窗口 ${s.window_days} 天</div>
+      <div class="mt" style="font-size:12.5px">
+        项目：${(s.project_names || []).map(esc).join("、") || "—"}
+      </div>
+      <div class="mt" style="font-size:12.5px">
+        模块：${(s.modules || []).map(m => esc(moduleLabel(m))).join("、")} ·
+        接收人：${(s.recipients || []).map(r => esc(r.name || r.target)).join("、")} ·
+        当前统计周期：${esc(s.period || "")}
+      </div>
+      ${s.latest_report ? `<div class="muted mt" style="font-size:12px">最近报告：${esc(s.latest_report.period_label)}（${s.latest_report.status === "sent" ? "已发送" : "草稿"}）
+        · <a href="javascript:void(0)" onclick="openReport('${s.latest_report.id}')">查看</a></div>` : ""}
+    </div>`).join("");
+}
+
+function moduleLabel(m) {
+  return { pass_rate_trend: "通过率趋势", top_failures: "失败 Top 用例",
+    open_defects: "未关闭缺陷", coverage_change: "覆盖率变化" }[m] || m;
+}
+
+function resetForm() {
+  editingId = null;
+  $("#edit-title").textContent = "新建订阅";
+  $("#f-name").value = ""; $("#f-cron").value = "0 9 * * 1"; $("#f-window").value = 7;
+  $("#f-mode").value = "auto"; $("#f-enabled").checked = true;
+  $$(".proj-chk").forEach(c => c.checked = false);
+  $$("#f-modules input").forEach(c => c.checked = true);
+  fillRecipients(null);
+  previewCron();
+}
+
+function editSub(id) {
+  const s = subscriptions.find(x => x.id === id);
+  if (!s) return;
+  editingId = id;
+  $("#edit-title").textContent = "编辑订阅";
+  $("#f-name").value = s.name || "";
+  $("#f-cron").value = s.cron || "";
+  $("#f-window").value = s.window_days || 7;
+  $("#f-mode").value = s.mode || "auto";
+  $("#f-enabled").checked = s.enabled !== false;
+  $$(".proj-chk").forEach(c => c.checked = (s.project_ids || []).includes(c.value));
+  $$("#f-modules input").forEach(c => c.checked = (s.modules || []).includes(c.value));
+  fillRecipients(s.recipients);
+  previewCron();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+async function previewCron() {
+  const expr = $("#f-cron").value.trim();
+  if (!expr) { $("#cron-desc").textContent = ""; return; }
+  try {
+    const d = await api(`/api/cron/describe?expr=${encodeURIComponent(expr)}`);
+    $("#cron-desc").textContent = "含义：" + d.description;
+  } catch (e) { $("#cron-desc").textContent = "表达式无效"; }
+}
+
+async function toggleSub(id, enabled) {
+  await api(`/api/weekly/subscriptions/${id}/pause`, { method: "POST", body: { enabled } });
+  toast(enabled ? "已恢复" : "已暂停");
+  loadSubscriptions();
+}
+
+async function delSub(id) {
+  if (!confirm("确认删除该订阅？历史报告与投递记录仍会保留。")) return;
+  await api(`/api/weekly/subscriptions/${id}`, { method: "DELETE" });
+  toast("已删除");
+  resetForm();
+  loadSubscriptions();
+}
+
+async function sendNow(id) {
+  if (!confirm("立即按该订阅生成并发送周报？同一统计周期内会复用已有草稿。")) return;
+  const r = await api(`/api/weekly/subscriptions/${id}/send`, { method: "POST" });
+  toast(`已投递给 ${r.sent_stats.delivered}/${r.sent_stats.recipient_count} 个接收人`);
+  loadSubscriptions();
+  openReportObject(r);
+}
+
+// ---------------- 保存 / 表单内预览 ----------------
+$("#btn-save").onclick = async () => {
+  const body = readForm();
+  if (!body.project_ids.length) return toast("至少选择一个项目", "error");
+  if (!body.modules.length) return toast("至少选择一个内容模块", "error");
+  if (!body.recipients.length) return toast("至少添加一个接收人", "error");
+  try {
+    if (editingId) {
+      await api(`/api/weekly/subscriptions/${editingId}`, { method: "PUT", body });
+      toast("已保存");
+    } else {
+      await api("/api/weekly/subscriptions", { method: "POST", body });
+      toast("已创建订阅");
+    }
+  } catch (e) { return toast(e.message, "error"); }
+  resetForm();
+  loadSubscriptions();
+};
+
+$("#btn-preview").onclick = async () => {
+  const body = readForm();
+  if (!body.project_ids.length) return toast("至少选择一个项目", "error");
+  if (!body.modules.length) return toast("至少选择一个内容模块", "error");
+  try {
+    // 临时预览：不创建/改动订阅，数字来自与正式发送相同的快照
+    const r = await api("/api/weekly/preview", { method: "POST",
+      body: { project_ids: body.project_ids, modules: body.modules,
+              window_days: body.window_days, title: body.name } });
+    openReportObject(r, { hideSend: true });
+  } catch (e) { toast(e.message, "error"); }
+};
+
+async function previewSub(id) {
+  const r = await api(`/api/weekly/subscriptions/${id}/preview`, { method: "POST" });
+  openReportObject(r);
+}
+
+// ---------------- 历史 ----------------
+async function loadHistory() {
+  const [rd, dd] = await Promise.all([
+    api("/api/weekly/reports"),
+    api("/api/weekly/deliveries"),
+  ]);
+  const reports = rd.reports || [];
+  const body = $("#history-body");
+  if (!reports.length) { body.innerHTML = '<tr><td colspan="7" class="empty">暂无报告</td></tr>'; }
+  else {
+    body.innerHTML = reports.map(r => `
+      <tr>
+        <td><a href="javascript:void(0)" onclick="openReport('${r.id}')">${esc(r.title)}</a></td>
+        <td>${esc(r.period_label || "")}</td>
+        <td>${(r.project_ids || []).length}</td>
+        <td>${r.status === "sent" ? '<span class="badge passed">已发送</span>' : '<span class="badge pending">草稿</span>'}</td>
+        <td>${r.status === "sent" ? fmtTime(r.sent_at) : fmtTime(r.created_at)}</td>
+        <td>${r.sent_stats ? `${r.sent_stats.delivered}/${r.sent_stats.recipient_count} 成功` : "—"}</td>
+        <td><button class="btn small secondary" onclick="openReport('${r.id}')">查看</button></td>
+      </tr>`).join("");
+  }
+  const dels = dd.deliveries || [];
+  $("#delivery-body").innerHTML = dels.length ? dels.map(d => `
+    <tr>
+      <td>${fmtTime(d.created_at)}</td>
+      <td>${esc(d.recipient_name || "—")}</td>
+      <td>${esc(d.recipient_type)}</td>
+      <td class="mono" style="font-size:12px">${esc(d.recipient)}</td>
+      <td>${d.status === "delivered" ? '<span class="badge passed">已送达</span>' : '<span class="badge failed">失败</span>'}</td>
+      <td>${d.latency_ms} ms</td>
+    </tr>`).join("") : '<tr><td colspan="6" class="empty">暂无投递</td></tr>';
+}
+
+async function openReport(id) {
+  const r = await api(`/api/weekly/reports/${id}`);
+  openReportObject(r);
+}
+
+// ---------------- 预览弹层渲染 ----------------
+function openReportObject(r, opts = {}) {
+  previewReport = r;
+  $("#pm-title").textContent = r.title || "质量周报";
+  $("#pm-period").textContent = `统计周期：${r.period_label} · 数据截止 ${fmtTime(r.cutoff_at)}`;
+  const st = $("#pm-status");
+  st.textContent = r.status === "sent" ? "已发送" : "草稿（未发送）";
+  st.className = `badge ${r.status === "sent" ? "passed" : "pending"}`;
+  $("#pm-meta").textContent =
+    `生成于 ${fmtTime(r.content && r.content.generated_at)}` +
+    (r.sent_stats ? ` · 投递 ${r.sent_stats.delivered}/${r.sent_stats.recipient_count} 成功` : "");
+  $("#pm-content").innerHTML = renderReportHtml(r.content);
+  $("#pm-text").textContent = r.text || "";
+  $("#pm-send").style.display = (opts.hideSend || r.status === "sent" || !r.subscription_id) ? "none" : "";
+  $("#pm-send-single").style.display = r.status === "sent" ? "none" : "";
+  $("#preview-modal").style.display = "flex";
+}
+
+function renderReportHtml(c) {
+  if (!c) return '<div class="empty">无内容</div>';
+  const o = c.overview;
+  const head = `
+    <div class="grid cols-4">
+      <div class="stat"><div class="v">${o.project_count}</div><div class="k">覆盖项目</div></div>
+      <div class="stat"><div class="v">${o.build_count}</div><div class="k">窗口内构建</div></div>
+      <div class="stat ${o.pass_rate >= 80 ? "good" : o.pass_rate < 60 ? "bad" : ""}"><div class="v">${o.pass_rate}%</div><div class="k">整体通过率（${o.passed_runs}/${o.total_runs}）</div></div>
+      <div class="stat ${o.open_defect_count ? "bad" : "good"}"><div class="v">${o.open_defect_count}</div><div class="k">未关闭缺陷</div></div>
+    </div>`;
+  const sections = (c.projects || []).map(p => {
+    const m = p.modules || {};
+    let html = `<div class="sub-item">
+      <div class="row spread"><strong>项目：${esc(p.project_name)}</strong>
+        <span class="muted" style="font-size:12.5px">构建 ${p.build_count} 次 · 通过率 ${p.pass_rate}% · 平均耗时 ${fmtDur(p.avg_duration)}</span></div>`;
+
+    if (m.pass_rate_trend) {
+      const t = m.pass_rate_trend;
+      const rows = (t.points || []).map(pt => `
+        <tr><td class="mono">${esc(pt.name)}</td>
+        <td><span class="badge ${pt.status === "passed" ? "passed" : "failed"}">${pt.status}</span></td>
+        <td>${pt.pass_rate}%</td><td>${pt.passed}/${pt.total}</td><td>${fmtDur(pt.duration)}</td>
+        <td>${fmtTime(pt.finished_at)}</td></tr>`).join("");
+      html += `<h3 style="margin-top:12px">通过率趋势（${t.first_rate}% → ${t.last_rate}%，${t.delta >= 0 ? "+" : ""}${t.delta}）</h3>
+        <table class="tbl"><thead><tr><th>构建</th><th>结果</th><th>通过率</th><th>通过/总数</th><th>耗时</th><th>时间</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">窗口内无构建</td></tr>'}</tbody></table>`;
+    }
+    if (m.top_failures) {
+      const items = m.top_failures || [];
+      html += `<h3 style="margin-top:12px">失败 Top 用例</h3>` +
+        (items.length ? `<table class="tbl"><thead><tr><th>#</th><th>用例</th><th>优先级</th><th>分组</th><th>失败次数</th><th>最近原因</th></tr></thead><tbody>` +
+          items.map((f, i) => `<tr><td>${i + 1}</td><td>${esc(f.case_name)}</td><td>${esc(f.priority)}</td>
+            <td>${esc(f.group)}</td><td><strong>${f.fail_count}</strong></td><td class="muted">${esc(f.last_reason || "—")}</td></tr>`).join("") +
+          `</tbody></table>` : '<div class="empty">本周期无失败用例 🎉</div>');
+    }
+    if (m.open_defects) {
+      const d = m.open_defects;
+      const dist = Object.entries(d.by_status || {}).map(([k, v]) => `<span class="tag">${esc(k)}: ${v}</span>`).join(" ");
+      const rows = (d.items || []).map(x => `<tr><td><span class="badge ${x.severity === "blocker" || x.severity === "critical" ? "failed" : "pending"}">${esc(x.severity)}</span></td>
+        <td>${esc(x.title)}</td><td>${esc(x.status)}</td><td>${esc(x.assignee || "—")}</td></tr>`).join("");
+      html += `<h3 style="margin-top:12px">未关闭缺陷（${d.total}）</h3><div class="row" style="gap:6px;margin-bottom:8px">${dist}</div>
+        <table class="tbl"><thead><tr><th>严重级</th><th>标题</th><th>状态</th><th>处理人</th></tr></thead><tbody>${rows || '<tr><td colspan="4" class="empty">无未关闭缺陷</td></tr>'}</tbody></table>`;
+    }
+    if (m.coverage_change) {
+      const cv = m.coverage_change;
+      if (cv.first_percent == null) {
+        html += `<h3 style="margin-top:12px">覆盖率变化</h3><div class="empty">窗口内无构建数据</div>`;
+      } else {
+        const up = cv.delta >= 0;
+        html += `<h3 style="margin-top:12px">覆盖率变化</h3>
+          <div class="row" style="gap:14px">
+            <span>窗口初：<strong>${cv.first_percent}%</strong></span><span>→</span>
+            <span>窗口末：<strong>${cv.last_percent}%</strong></span>
+            <span class="badge ${up ? "passed" : "failed"}">${up ? "▲" : "▼"} ${Math.abs(cv.delta)} 个百分点</span>
+          </div>`;
+      }
+    }
+    return html + "</div>";
+  }).join("");
+  return head + sections;
+}
+
+// ---------------- 弹层操作 ----------------
+$("#pm-close").onclick = () => { $("#preview-modal").style.display = "none"; };
+$("#preview-modal").addEventListener("click", e => {
+  if (e.target.id === "preview-modal") e.target.style.display = "none";
+});
+
+$("#pm-send").onclick = async () => {
+  if (!previewReport || !previewReport.id) return;
+  if (!confirm("确认把这份周报发送给该订阅的全部接收人？")) return;
+  const r = await api(`/api/weekly/reports/${previewReport.id}/send`, { method: "POST", body: {} });
+  toast(`已投递给 ${r.sent_stats.delivered}/${r.sent_stats.recipient_count} 个接收人`);
+  openReportObject(r);
+  loadSubscriptions();
+};
+
+$("#pm-send-single").onclick = async () => {
+  if (!previewReport) return;
+  const target = prompt("输入临时接收目标（邮箱 / Webhook / 频道）：同一份数据快照单独发给这个人，不影响订阅配置。");
+  if (!target || !target.trim()) return;
+  const type = target.includes("http") ? "webhook" : (target.includes("@") ? "email" : "dingtalk");
+  const r = await api(`/api/weekly/reports/${previewReport.id}/send`, { method: "POST",
+    body: { recipients: [{ type, name: "临时接收人", target: target.trim() }] } });
+  toast(`已发送（${r.sent_stats.delivered} 成功）`);
+  openReportObject(r);
+};
+
+// ---------------- Tab 切换 ----------------
+$("#tab-subs").onclick = () => switchTab("subs");
+$("#tab-history").onclick = () => switchTab("history");
+function switchTab(name) {
+  $("#pane-subs").style.display = name === "subs" ? "" : "none";
+  $("#pane-history").style.display = name === "history" ? "" : "none";
+  $("#tab-subs").className = name === "subs" ? "btn" : "btn secondary";
+  $("#tab-history").className = name === "history" ? "btn" : "btn secondary";
+  if (name === "history") loadHistory();
+}
+
+$("#btn-new").onclick = resetForm;
+$("#btn-cancel").onclick = resetForm;
+
+init();
+</script>
+</body>
+</html>
